@@ -52,21 +52,30 @@ class ChatStreamIn(BaseModel):
 
 
 # -------- Utils --------
-'''
-_uuvid_re = re.compile(r"^[0-9a-fA-F-]{36}$")
+
+#TODO: remove the below after successful testing and use checks below
+#_site_id_re = re.compile(r"^[A-Za-z0-9_-]{3,64}$") #for testing
+#def _validate_website_id(website_id: str) -> None:
+#    if not _site_id_re.match(website_id):
+#        raise HTTPException(status_code=400, detail="Invalid website_id format")
+
+_uuid_re = re.compile(
+    r"^[0-9a-fA-F]{8}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12}$"
+)
+
+def _validate_uuid(value: str, field_name: str) -> None:
+    if not _uuid_re.match(value or ""):
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name} format")
 
 def _validate_website_id(website_id: str) -> None:
-    if not _uuid_re.match(website_id):
-        raise HTTPException(status_code=400, detail="Invalid website_id format")
-'''
+    _validate_uuid(website_id, "website_id")
 
-################## To be removed after testing #####################
-#TODO: remove the below after successful testing and use the block above
-# allow letters, numbers, underscore, dash; length 3–64
-_site_id_re = re.compile(r"^[A-Za-z0-9_-]{3,64}$") #for testing
-def _validate_website_id(website_id: str) -> None:
-    if not _site_id_re.match(website_id):
-        raise HTTPException(status_code=400, detail="Invalid website_id format")
+
+
 ################## To be removed after testing #####################
 
 def _origin_host(origin: str | None) -> str | None:
@@ -125,12 +134,12 @@ def _rate_limited(website_id: str, ip: str | None) -> bool:
 def _get_or_create_chat(website_id: str, session_id: str, visitor_id: str) -> str:
     """
     Find a chat for (website_id, session_id) or create one.
+    Ensures visitor_id is set on the chat row.
     Returns chat.id (uuid as string).
     """
-    # Try to find existing chat
     existing = (
         svc.from_("chats")
-        .select("id")
+        .select("id, visitor_id")
         .eq("website_id", website_id)
         .eq("session_id", session_id)
         .limit(1)
@@ -138,23 +147,29 @@ def _get_or_create_chat(website_id: str, session_id: str, visitor_id: str) -> st
     )
     data = existing.data or []
     if data:
-        return data[0]["id"]
+        chat_id = data[0]["id"]
+        existing_visitor = data[0].get("visitor_id")
 
-    # Create new chat
+        # If visitor_id was previously missing, backfill it
+        if not existing_visitor and visitor_id:
+            svc.table("chats").update({"visitor_id": visitor_id}).eq("id", chat_id).execute()
+
+        return chat_id
+
+    # Create new chat WITH visitor_id
     insert_res = (
         svc.table("chats")
         .insert(
             {
                 "website_id": website_id,
                 "session_id": session_id,
-                #"visitor_id": visitor_id,
-                # let DB default started_at
+                "visitor_id": visitor_id,
+                # started_at default is handled by DB
             }
         )
         .execute()
     )
 
-    # If insert returned the row, use it
     if insert_res.data:
         return insert_res.data[0]["id"]
 
@@ -168,6 +183,7 @@ def _get_or_create_chat(website_id: str, session_id: str, visitor_id: str) -> st
         .execute()
     )
     return created.data[0]["id"]
+
 
 def _insert_message(chat_id: str, role: str, content: str) -> str:
     """
@@ -378,6 +394,8 @@ def chat_query(payload: ChatQueryIn) -> ChatAnswerOut:
     - (Optional) logs chat to DB (commented below)
     """
     _validate_website_id(payload.website_id)
+    _validate_uuid(payload.visitor_id, "visitor_id")
+    _validate_uuid(payload.session_id, "session_id")
 
     context, used = _gather_context(payload.website_id, payload.question)
     answer = _generate_answer(payload.question, context)
@@ -536,6 +554,9 @@ def chat_stream(payload: ChatStreamIn, request: Request):
         msg = e.detail if isinstance(e.detail, str) else "Request failed"
         return _sse_error("HTTP_ERROR", msg, status_code=e.status_code)
 
-    except Exception:
+
+    except Exception as e:
+        print("CHAT_STREAM ERROR:", repr(e))
         return _sse_error("INTERNAL", "Unexpected error while handling chat request", status_code=200)
+
 
