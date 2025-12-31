@@ -8,6 +8,7 @@ from backend.services.security import authenticate_request
 from backend.middleware.auth_middleware import AuthMiddleware
 from backend.routers import chat
 #from backend.routers import documents <-- will be needed later when website owners will upload their docs
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="AI Assistant Backend")
 
@@ -21,7 +22,7 @@ async def auth_middleware(request: Request, call_next):
 # TODO: make it tighter if required
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5500"],
+    allow_origins=["http://localhost:8000", "http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5500"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -35,6 +36,8 @@ app.include_router(chat.router)
 #app.include_router(documents.router) <-- will be needed later
 
 # If you already have CORS & health routes, keep them as-is.
+
+app.mount("/widget", StaticFiles(directory="frontend/widget", html=True), name="widget")
 
 @app.get("/")
 def root():
