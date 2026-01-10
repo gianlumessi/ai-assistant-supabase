@@ -13,7 +13,7 @@ import time
 import json
 from urllib.parse import urlparse
 from collections import defaultdict, deque
-
+from backend.services.retrieval import gather_context
 
 
 # -------- Config --------
@@ -219,21 +219,6 @@ def _storage_prefix(website_id: str) -> str:
     return row.get("public_key") or website_id
 
 
-def _list_site_files(website_id: str) -> List[dict]:
-    """
-    List objects under documents/{website_id}/
-    Returns a list of objects with .name and .metadata if available.
-    """
-    prefix = _storage_prefix(website_id)
-    # Supabase Storage lists by prefix via .list(path=..., options=...)
-    # We default to top-level under the website folder.
-    objects = svc.storage.from_(BUCKET).list(path=prefix, options={"limit": 1000})
-    # objects is a list of dicts like {"name": "folder_or_file", "id": "...", "metadata": {...}}
-    # We must qualify to full path "website_id/name"
-    for o in objects:
-        o["full_path"] = f"{prefix}/{o['name']}"
-    return objects
-
 def _download_object(path: str) -> bytes:
     data = svc.storage.from_(BUCKET).download(path)
     if isinstance(data, bytes):
@@ -279,68 +264,6 @@ def _extract_text(name: str, blob: bytes) -> str:
     return ""
 
 
-def _overlaps(question: str, text: str) -> bool:
-    """Relevance filter: pick only the parts that look related to the question, don't select the whole file.
-    Quick check: does the question share any words with this text?"""
-    words = re.findall(r"[A-Za-z]{3,}", question.lower())
-    common = {"the", "and", "for", "with", "from", "this", "that", "your", "you"}
-    words = [w for w in words if w not in common]
-    text_l = text.lower()
-    return any(w in text_l for w in words[:8])  # check first few keywords
-
-
-def _gather_context(website_id: str, question: str) -> Tuple[str, list[str]]:
-    """
-    Pull up to MAX_FILES_PER_QUERY files under the website folder,
-    each capped by MAX_FILE_MB, and return concatenated text + file list.
-    """
-    objs = _list_site_files(website_id)
-    selected = []
-    text_parts = []
-    for o in objs:
-        if len(selected) >= MAX_FILES_PER_QUERY:
-            break
-        # Skip folders
-        if o.get("metadata", {}).get("mimetype") is None and "." not in o["name"]:
-            continue
-
-        full_path = o["full_path"]
-        try:
-            blob = _download_object(full_path)
-        except Exception:
-            continue
-        if len(blob) > MAX_FILE_MB * 1024 * 1024:
-            continue
-
-        text = _extract_text(o["name"], blob)
-
-        if text.strip() and _overlaps(question, text):
-            text_parts.append(f"\n\n--- FILE: {o['name']} ---\n{text}")
-            selected.append(full_path)
-
-    return ("\n".join(text_parts).strip(), selected)
-
-
-
-''' This was a placeholder function
-def _generate_answer(question: str, context: str) -> str:
-    """
-    Placeholder answer generator.
-    Replace this with your LLM call (OpenAI, Claude, etc.),
-    e.g., send `question` and `context` as system/user messages.
-    """
-    if not context:
-        return "I couldn't find relevant content for this website yet. Please add documents."
-    # Naive heuristic for now
-    return (
-        "Based on the website's documents, here's a concise answer:\n\n"
-        f"Q: {question}\n"
-        "A: (Draft) The documents mention:\n"
-        f"{context[:1200]}{'...' if len(context) > 1200 else ''}\n\n"
-        "— Replace this with your LLM call for a real answer."
-    )
-'''
-
 def _generate_answer(question: str, context: str) -> str:
     """
     Real answer generator using OpenAI Chat Completions.
@@ -365,7 +288,7 @@ def _generate_answer(question: str, context: str) -> str:
     client = OpenAI(api_key=api_key)
     prompt = textwrap.dedent(f"""
     You are a helpful assistant. Answer using ONLY the context below.
-    If the answer isn't in the context, say you don't have enough information.
+    If the answer isn't in the context, say there is not enough information.
 
     Question:
     {question}
@@ -397,7 +320,7 @@ def chat_query(payload: ChatQueryIn) -> ChatAnswerOut:
     _validate_uuid(payload.visitor_id, "visitor_id")
     _validate_uuid(payload.session_id, "session_id")
 
-    context, used = _gather_context(payload.website_id, payload.question)
+    context, used_files = gather_context(payload.website_id, payload.message)
     answer = _generate_answer(payload.question, context)
 
     # Optional: Log chat & message (service role bypasses RLS)
@@ -412,7 +335,7 @@ def chat_query(payload: ChatQueryIn) -> ChatAnswerOut:
     #     {"chat_id": chat_id, "role": "assistant", "content": answer},
     # ]).execute()
 
-    return ChatAnswerOut(answer=answer, used_files=used, tokens_context=len(context) if context else 0)
+    return ChatAnswerOut(answer=answer, used_files=used_files, tokens_context=len(context) if context else 0)
 
 @router.post("/stream")
 def chat_stream(payload: ChatStreamIn, request: Request):
@@ -440,7 +363,7 @@ def chat_stream(payload: ChatStreamIn, request: Request):
             return _sse_error("RATE_LIMITED", "Rate limit exceeded", status_code=429)
 
         # 1) Context
-        context, used_files = _gather_context(payload.website_id, payload.message)
+        context, used_files = gather_context(payload.website_id, payload.message)
         tokens_context = len(context) if context else 0
 
         # 2) Chat + store user message (do this before streaming)
