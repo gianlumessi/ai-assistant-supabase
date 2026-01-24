@@ -9,6 +9,12 @@ from backend.middleware.auth_middleware import AuthMiddleware
 from backend.routers import chat
 #from backend.routers import documents <-- will be needed later when website owners will upload their docs
 from fastapi.staticfiles import StaticFiles
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 app = FastAPI(title="AI Assistant Backend")
 

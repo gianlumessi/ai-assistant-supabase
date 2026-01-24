@@ -136,18 +136,9 @@ def gather_context(
     query_emb = embed_query(question)
     chunks = _fetch_chunks(website_id)
 
-    print("CHUNKS FETCHED:", len(chunks))
-    if chunks:
-        sample = chunks[0]
-        print("SAMPLE KEYS:", sample.keys())
-        print("SAMPLE content_len:", len((sample.get("content") or "")))
-        emb = sample.get("embedding")
-        print("SAMPLE embedding_type:", type(emb), "embedding_len:", (len(emb) if isinstance(emb, list) else None))
-
     scored = []
     for c in chunks:
         content = c.get("content") or ""
-        #emb = c.get("embedding")
         emb = _coerce_embedding(c.get("embedding"))
 
         if not content.strip() or not emb:
@@ -169,16 +160,11 @@ def gather_context(
     scored.sort(key=lambda x: x["score"], reverse=True)
     top = scored[:top_n]
 
-    print("TOP CHUNKS:", [(c["document_id"], c["chunk_index"], round(c["score"], 3)) for c in top])
-
     context = "\n\n".join(
         f"[document {c['document_id']} – chunk {c['chunk_index']}]\n{c['content']}"
         for c in top
     )
 
     used_docs = list({c["document_id"] for c in top})
-
-    print("RETRIEVAL CONTEXT (first 1200 chars):\n", context[:1200])
-    print("USED DOCS:", used_docs)
 
     return context, used_docs

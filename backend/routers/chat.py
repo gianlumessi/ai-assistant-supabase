@@ -1,19 +1,15 @@
 # backend/routers/chat.py
 from __future__ import annotations
 
-import io
-import os
-import re
-from typing import Optional, List, Tuple
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, HttpUrl
 from supabase import create_client
 from fastapi.responses import StreamingResponse
-import time
-import json
 from urllib.parse import urlparse
 from collections import defaultdict, deque
 from backend.services.retrieval import gather_context
+import io, re, json, os, time, uuid, logging
 
 
 # -------- Config --------
@@ -27,6 +23,7 @@ MAX_FILES_PER_QUERY = int(os.getenv("MAX_FILES_PER_QUERY", "5"))
 svc = create_client(SUPABASE_URL, SERVICE_ROLE)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+log = logging.getLogger(__name__)
 
 _RATE = defaultdict(deque)  # key -> timestamps
 RATE_WINDOW_SEC = 60
@@ -264,6 +261,7 @@ def _extract_text(name: str, blob: bytes) -> str:
     return ""
 
 
+
 def _generate_answer(question: str, context: str) -> str:
     """
     Real answer generator using OpenAI Chat Completions.
@@ -337,149 +335,217 @@ def chat_query(payload: ChatQueryIn) -> ChatAnswerOut:
 
     return ChatAnswerOut(answer=answer, used_files=used_files, tokens_context=len(context) if context else 0)
 
+def _fetch_recent_messages(chat_id: str, limit: int = 16):
+    res = (
+        svc.table("messages")
+        .select("role,content,created_at")
+        .eq("chat_id", chat_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    rows = res.data or []
+    rows.reverse()  # chronological
+    return [{"role": r["role"], "content": r["content"]} for r in rows]
+
+
 @router.post("/stream")
 def chat_stream(payload: ChatStreamIn, request: Request):
     """
     Streaming endpoint for the website chat bubble (REAL OpenAI token streaming).
+    SSE events:
+      - token: {"text": "...", "seq": n}
+      - final: {"message": "...", "used_files": [...], "tokens_context": n, "latency_ms": n, "usage": {...}, "request_id": "..."}
+               OR {"error": {...}, "request_id": "..."}
+      - end: {}
     """
-    def _sse_error(code: str, message: str, status_code: int = 200):
+    request_id = str(uuid.uuid4())
+
+    def _sse(event: str, data: dict) -> str:
+        return f"event: {event}\n" f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    def _error_payload(code: str, message: str, retryable: bool) -> dict:
+        return {
+            "error": {
+                "code": code,
+                "message": message,
+                "retryable": retryable,
+                "request_id": request_id,
+            },
+            "request_id": request_id,
+        }
+
+    def _sse_error_response(code: str, message: str, status_code: int, retryable: bool):
         def error_stream():
-            payload_err = {"error": {"code": code, "message": message}}
-            yield "event: final\n"
-            yield f"data: {json.dumps(payload_err)}\n\n"
-            yield "event: end\n"
-            yield "data: {}\n\n"
+            yield _sse("final", _error_payload(code, message, retryable))
+            yield _sse("end", {})
         return StreamingResponse(error_stream(), media_type="text/event-stream", status_code=status_code)
 
+    # ---- Early validation / guardrails (must return a proper SSE final+end) ----
     try:
         _validate_website_id(payload.website_id)
 
         origin = request.headers.get("origin")
         if not _is_origin_allowed(payload.website_id, origin):
-            return _sse_error("INVALID_ORIGIN", "Origin not allowed for this website", status_code=403)
+            return _sse_error_response(
+                "INVALID_ORIGIN",
+                "Origin not allowed for this website.",
+                status_code=403,
+                retryable=False,
+            )
 
         ip = request.client.host if request.client else None
         if _rate_limited(payload.website_id, ip):
-            return _sse_error("RATE_LIMITED", "Rate limit exceeded", status_code=429)
+            return _sse_error_response(
+                "RATE_LIMITED",
+                "Rate limit exceeded. Please try again shortly.",
+                status_code=429,
+                retryable=True,
+            )
 
-        # 1) Context
-        context, used_files = gather_context(payload.website_id, payload.message)
+        # 1) Context (do not fail the whole request if retrieval breaks)
+        try:
+            context, used_files = gather_context(payload.website_id, payload.message)
+        except Exception:
+            log.exception("Context retrieval failed request_id=%s website_id=%s", request_id, payload.website_id)
+            context, used_files = "", []
         tokens_context = len(context) if context else 0
 
-        # 2) Chat + store user message (do this before streaming)
+        # 2) Chat + store user message (best-effort)
         chat_id = _get_or_create_chat(
             website_id=payload.website_id,
             session_id=payload.session_id,
-            visitor_id=payload.visitor_id,  # ok if ignored in DB for now
+            visitor_id=payload.visitor_id,
         )
-        _insert_message(chat_id, role="user", content=payload.message)
 
-        # 3) SSE generator with real OpenAI stream
-        def event_stream():
-            start_ts = time.perf_counter()
-            full_answer_parts: list[str] = []
+        history = _fetch_recent_messages(chat_id, limit=20)
+        history = [m for m in history if m.get("role") in ("user", "assistant")]
 
-            try:
-                api_key = os.getenv("OPENAI_API_KEY")
-                if not api_key:
-                    # Fallback: no streaming possible
-                    answer = _generate_answer(payload.message, context)
-                    full_answer_parts.append(answer)
-
-                    # stream as a single token chunk
-                    yield "event: token\n"
-                    yield f"data: {json.dumps({'text': answer, 'seq': 1})}\n\n"
-                    usage = None
-
-                else:
-                    from openai import OpenAI
-
-                    client = OpenAI(api_key=api_key)
-
-                    max_ctx = 6000
-                    ctx = (context or "")[:max_ctx]
-
-                    system_msg = (
-                        "You are a helpful assistant. Answer using ONLY the context provided. "
-                        "If the answer isn't in the context, say you don't have enough information."
-                    )
-                    user_msg = f"Question:\n{payload.message}\n\nContext:\n{ctx}"
-
-                    seq = 0
-                    usage = None
-
-                    stream = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content": system_msg},
-                            {"role": "user", "content": user_msg},
-                        ],
-                        temperature=0.2,
-                        stream=True,
-                        stream_options={"include_usage": True},
-                    )
-
-                    for chunk in stream:
-                        # Some chunks contain usage (at the end) without delta content
-                        if getattr(chunk, "usage", None) is not None:
-                            usage = {
-                                "prompt_tokens": chunk.usage.prompt_tokens,
-                                "completion_tokens": chunk.usage.completion_tokens,
-                                "total_tokens": chunk.usage.total_tokens,
-                            }
-                            continue
-
-                        delta = chunk.choices[0].delta
-                        text = getattr(delta, "content", None)
-                        if not text:
-                            continue
-
-                        full_answer_parts.append(text)
-                        seq += 1
-
-                        yield "event: token\n"
-                        yield f"data: {json.dumps({'text': text, 'seq': seq})}\n\n"
-
-                full_answer = "".join(full_answer_parts).strip()
-                latency_ms = int((time.perf_counter() - start_ts) * 1000)
-
-                # Store assistant message after streaming completes
-                _insert_message(chat_id, role="assistant", content=full_answer)
-
-                final_payload = {
-                    "message": full_answer,
-                    "used_files": used_files,
-                    "tokens_context": tokens_context,
-                    "latency_ms": latency_ms,
-                    "usage": usage,
-                }
-
-                yield "event: final\n"
-                yield f"data: {json.dumps(final_payload)}\n\n"
-
-            except Exception:
-                payload_err = {
-                    "error": {
-                        "code": "STREAM_ERROR",
-                        "message": "Error while generating/streaming response",
-                    }
-                }
-                yield "event: final\n"
-                yield f"data: {json.dumps(payload_err)}\n\n"
-
-            finally:
-                yield "event: end\n"
-                yield "data: {}\n\n"
-
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
+        try:
+            _insert_message(chat_id, role="user", content=payload.message)
+        except Exception:
+            log.exception("Failed to persist user message request_id=%s chat_id=%s", request_id, chat_id)
 
     except HTTPException as e:
-        msg = e.detail if isinstance(e.detail, str) else "Request failed"
-        return _sse_error("HTTP_ERROR", msg, status_code=e.status_code)
+        msg = e.detail if isinstance(e.detail, str) else "Request failed."
+        # Most HTTPExceptions here are non-retryable client issues
+        return _sse_error_response("HTTP_ERROR", msg, status_code=e.status_code, retryable=False)
+    except Exception:
+        log.exception("Pre-stream failure request_id=%s", request_id)
+        return _sse_error_response(
+            "INTERNAL",
+            "Unexpected error while handling the request.",
+            status_code=500,
+            retryable=True,
+        )
 
+    # ---- SSE generator (must always emit final then end) ----
+    def event_stream():
+        start_ts = time.perf_counter()
+        full_answer_parts: list[str] = []
+        usage = None
 
-    except Exception as e:
-        print("CHAT_STREAM ERROR:", repr(e))
-        return _sse_error("INTERNAL", "Unexpected error while handling chat request", status_code=200)
+        try:
+            api_key = os.getenv("OPENAI_API_KEY")
 
+            # Build messages (system + optional context + history + user)
+            max_ctx = 6000
+            ctx = (context or "")[:max_ctx]
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant. Answer using the provided context and "
+                        "the conversation history. If the answer is not supported, say you "
+                        "do not have enough information to answer the question and advise "
+                        "the user to message the website owner."
+                    ),
+                }
+            ]
+            if ctx:
+                messages.append({"role": "system", "content": f"Context for answering:\n\n{ctx}"})
+            messages.extend(history)
+            messages.append({"role": "user", "content": payload.message})
+
+            # If no API key, fallback to non-stream generation, but keep SSE contract
+            if not api_key:
+                answer = _generate_answer(payload.message, context)
+                answer = (answer or "").strip()
+                if answer:
+                    full_answer_parts.append(answer)
+                    yield _sse("token", {"text": answer, "seq": 1})
+                # usage stays None
+
+            else:
+                from openai import OpenAI
+
+                # Add timeout to reduce hang risk (MVP-safe)
+                client = OpenAI(api_key=api_key)
+
+                seq = 0
+                stream = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    temperature=0.2,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                    # OpenAI python supports request-level timeout via http client settings in some versions;
+                    # keep this if supported in your installed version:
+                    timeout=60,
+                )
+
+                for chunk in stream:
+                    # Usage appears at the end (no delta)
+                    if getattr(chunk, "usage", None) is not None:
+                        usage = {
+                            "prompt_tokens": chunk.usage.prompt_tokens,
+                            "completion_tokens": chunk.usage.completion_tokens,
+                            "total_tokens": chunk.usage.total_tokens,
+                        }
+                        continue
+
+                    delta = chunk.choices[0].delta
+                    text = getattr(delta, "content", None)
+                    if not text:
+                        continue
+
+                    full_answer_parts.append(text)
+                    seq += 1
+                    yield _sse("token", {"text": text, "seq": seq})
+
+            full_answer = "".join(full_answer_parts).strip()
+            latency_ms = int((time.perf_counter() - start_ts) * 1000)
+
+            # Persist assistant message best-effort
+            try:
+                if full_answer:
+                    _insert_message(chat_id, role="assistant", content=full_answer)
+            except Exception:
+                log.exception("Failed to persist assistant message request_id=%s chat_id=%s", request_id, chat_id)
+
+            final_payload = {
+                "message": full_answer,
+                "used_files": used_files,
+                "tokens_context": tokens_context,
+                "latency_ms": latency_ms,
+                "usage": usage,
+                "request_id": request_id,
+            }
+            yield _sse("final", final_payload)
+
+        except Exception:
+            log.exception("Stream error request_id=%s chat_id=%s", request_id, chat_id)
+            yield _sse(
+                "final",
+                _error_payload(
+                    code="STREAM_ERROR",
+                    message="Error while generating the response. Please try again.",
+                    retryable=True,
+                ),
+            )
+        finally:
+            yield _sse("end", {})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
