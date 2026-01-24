@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI Assistant Widget Demo</title>
-  <script src="./chat-widget.js"></script>
+  <script src="./chat-widget.js?v=dev"></script>
   <style>
     body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 32px; background: #f8fafc; }
     h1 { margin-top: 0; }
@@ -28,7 +28,14 @@
   <script>
     const apiBase = document.querySelector('#apiBase').value.trim();
     const websiteId = document.querySelector('#websiteId').value.trim();
-    window.AIChatWidget.init({ apiBase, websiteId, title: 'AI Assistant' });
+    window.AIChatWidget.init({ apiBase, websiteId, title: 'AI Assistant',
+     theme: {
+    primary: '#6905c9',
+    primary2: '#6905c9'
+  },
+  onFeedback: (fb) => {
+    console.log(fb);
+  }});
   </script>
 </body>
 </html>
