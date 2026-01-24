@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.supabase_client import get_supabase
@@ -9,12 +9,25 @@ from backend.middleware.auth_middleware import AuthMiddleware
 from backend.routers import chat
 #from backend.routers import documents <-- will be needed later when website owners will upload their docs
 from fastapi.staticfiles import StaticFiles
-import logging
+from backend.core.logging_config import setup_logging, get_logger
+from backend.core.config import config
+from backend.core.exceptions import ConfigurationError, DatabaseError
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+# Validate environment variables before starting the application
+try:
+    config.validate_and_load()
+except ConfigurationError as e:
+    print(f"FATAL: {e}")
+    raise SystemExit(1)
+
+# Setup structured logging
+setup_logging(
+    use_json=config.USE_JSON_LOGGING,
+    level=config.LOG_LEVEL
 )
+
+logger = get_logger(__name__)
+logger.info('AI Assistant Backend starting up')
 
 app = FastAPI(title="AI Assistant Backend")
 
@@ -60,49 +73,81 @@ def root():
 # Health: checks DB via anon key; point to an existing table (websites)
 @app.get("/health/db")
 def db_health():
-    sb = get_supabase(privileged=False)
-    res = sb.table("websites").select("id", count="exact").limit(1).execute()
-    return {"ok": True, "count": res.count}
+    try:
+        sb = get_supabase(privileged=False)
+        res = sb.table("websites").select("id", count="exact").limit(1).execute()
+        return {"ok": True, "count": res.count}
+    except Exception as e:
+        logger.error(f'Database health check failed: {str(e)}')
+        raise HTTPException(status_code=503, detail='Database unavailable')
 
 # Debug: privileged list of websites (admin only)
 @app.get("/debug/websites")
 def debug_websites():
-    sb = get_supabase(privileged=True)
-    res = sb.table("websites").select("*").limit(10).execute()
-    return {"rows": res.data}
+    try:
+        sb = get_supabase(privileged=True)
+        res = sb.table("websites").select("*").limit(10).execute()
+        return {"rows": res.data}
+    except Exception as e:
+        logger.error(f'Failed to fetch websites: {str(e)}')
+        raise HTTPException(status_code=500, detail='Failed to fetch websites')
 
 # ---------- Stage 1 core: Chats & Messages (scoped by website_id) ----------
 
 # Create a chat
 @app.post("/chats")
 def create_chat(payload: dict = {}, website: WebsiteContext = Depends(get_website_context)):
-    res = scoped_table("chats", website, privileged=False).insert({
-        "title": payload.get("title", "New Chat")
-    }).execute()
-    return res.data
+    try:
+        res = scoped_table("chats", website, privileged=False).insert({
+            "title": payload.get("title", "New Chat")
+        }).execute()
+        logger.info(f'Chat created successfully for website {website.website_id}')
+        return res.data
+    except Exception as e:
+        logger.error(f'Failed to create chat for website {website.website_id}: {str(e)}')
+        raise HTTPException(status_code=500, detail='Failed to create chat')
 
 # List chats for a website
 @app.get("/chats")
 def list_chats(website: WebsiteContext = Depends(get_website_context)):
-    res = scoped_table("chats", website, privileged=False).select("id,title,created_at").execute()
-    return res.data
+    try:
+        res = scoped_table("chats", website, privileged=False).select("id,title,created_at").execute()
+        return res.data
+    except Exception as e:
+        logger.error(f'Failed to list chats for website {website.website_id}: {str(e)}')
+        raise HTTPException(status_code=500, detail='Failed to list chats')
 
 # Add a message to a chat
 @app.post("/messages")
 def add_message(payload: dict, website: WebsiteContext = Depends(get_website_context)):
-    # expects: chat_id, role, content
-    res = scoped_table("messages", website, privileged=False).insert({
-        "chat_id": payload["chat_id"],
-        "role": payload.get("role", "user"),
-        "content": payload["content"],
-    }).execute()
-    return res.data
+    try:
+        # expects: chat_id, role, content
+        chat_id = payload.get("chat_id")
+        if not chat_id:
+            raise HTTPException(status_code=400, detail="chat_id is required")
+
+        res = scoped_table("messages", website, privileged=False).insert({
+            "chat_id": chat_id,
+            "role": payload.get("role", "user"),
+            "content": payload.get("content", ""),
+        }).execute()
+        logger.info(f'Message added to chat {chat_id}')
+        return res.data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f'Failed to add message: {str(e)}')
+        raise HTTPException(status_code=500, detail='Failed to add message')
 
 # List messages for a chat
 @app.get("/messages")
 def list_messages(chat_id: str, website: WebsiteContext = Depends(get_website_context)):
-    query = scoped_table("messages", website, privileged=False) \
-        .select("id,role,content,created_at") \
-        .eq("chat_id", chat_id)
-    res = query.execute()
-    return res.data
+    try:
+        query = scoped_table("messages", website, privileged=False) \
+            .select("id,role,content,created_at") \
+            .eq("chat_id", chat_id)
+        res = query.execute()
+        return res.data
+    except Exception as e:
+        logger.error(f'Failed to list messages for chat {chat_id}: {str(e)}')
+        raise HTTPException(status_code=500, detail='Failed to list messages')

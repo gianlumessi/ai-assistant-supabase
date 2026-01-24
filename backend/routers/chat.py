@@ -9,21 +9,30 @@ from fastapi.responses import StreamingResponse
 from urllib.parse import urlparse
 from collections import defaultdict, deque
 from backend.services.retrieval import gather_context
+from backend.core.logging_config import get_logger
+from backend.core.config import config
+from backend.core.exceptions import RetrievalError, DatabaseError
 import io, re, json, os, time, uuid, logging
 
 
 # -------- Config --------
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SERVICE_ROLE = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+# Get configuration from validated config
+try:
+    SUPABASE_URL, _, SERVICE_ROLE = config.get_supabase_config()
+except Exception:
+    # Fallback for initialization
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+    SERVICE_ROLE = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+
 BUCKET = os.getenv("STORAGE_BUCKET_DOCS", "documents")
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "10"))
 MAX_FILES_PER_QUERY = int(os.getenv("MAX_FILES_PER_QUERY", "5"))
 
 # Service-role client (backend-only; never expose to browsers)
-svc = create_client(SUPABASE_URL, SERVICE_ROLE)
+svc = create_client(SUPABASE_URL, SERVICE_ROLE) if SUPABASE_URL and SERVICE_ROLE else None
 
 router = APIRouter(prefix="/chat", tags=["chat"])
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 _RATE = defaultdict(deque)  # key -> timestamps
 RATE_WINDOW_SEC = 60
