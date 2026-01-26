@@ -324,10 +324,11 @@ def gather_context(
         used_docs = list({c["document_id"] for c in top})
 
         duration = time.time() - start_time
+        top_score = top[0]["score"] if top else 0.0
         logger.info(
             f'Context gathered: top_chunks={len(top)}, unique_docs={len(used_docs)}, '
             f'context_length={len(context)}, duration={duration:.2f}s, '
-            f'top_score={top[0]["score"]:.4f if top else 0}'
+            f'top_score={top_score:.4f}'
         )
 
         return context, used_docs
