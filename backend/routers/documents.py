@@ -158,7 +158,11 @@ async def upload_document(
             {"contentType": mime_type, "upsert": False},
         )
     except Exception as e:
-        raise HTTPException(403, f"Storage upload failed: {str(e)}")
+        # Log the actual error for debugging, but return sanitized message to user
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Storage upload failed for {file.filename}: {str(e)}")
+        raise HTTPException(500, "Unable to upload file. Please try again.")
 
     # Step 2: Add metadata record in public.documents
     doc_row = {
@@ -174,12 +178,16 @@ async def upload_document(
     try:
         resp = client.table("documents").insert(doc_row).select("*").single().execute()
     except Exception as e:
+        # Log the actual error for debugging, but return sanitized message to user
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Database insert failed for {file.filename}: {str(e)}")
         # Cleanup the uploaded file if DB insert fails
         try:
             client.storage.from_(BUCKET).remove([path])
         except Exception:
             pass
-        raise HTTPException(403, f"DB insert failed: {str(e)}")
+        raise HTTPException(500, "Unable to save document metadata. Please try again.")
 
     if not resp or not getattr(resp, "data", None):
         raise HTTPException(500, "Failed to insert document row")
@@ -270,8 +278,13 @@ async def delete_document(
         client.storage.from_(BUCKET).remove([path])
     except Exception as e:
         msg = str(e)
+        # Ignore "not found" errors (file already deleted)
         if "not found" not in msg.lower():
-            raise HTTPException(403, f"Failed to delete storage object: {msg}")
+            # Log the actual error for debugging, but return sanitized message to user
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to delete storage file {path}: {msg}")
+            raise HTTPException(500, "Unable to delete file from storage. Please try again.")
 
     # Step 3: Delete DB row
     client.table("documents").delete().eq("id", doc_id).eq("website_id", website_id).execute()

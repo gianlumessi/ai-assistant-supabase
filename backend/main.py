@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.core.supabase_client import get_supabase
 from backend.core.website import get_website_context, WebsiteContext
@@ -11,7 +12,16 @@ from backend.routers import chat
 from fastapi.staticfiles import StaticFiles
 from backend.core.logging_config import setup_logging, get_logger
 from backend.core.config import config
-from backend.core.exceptions import ConfigurationError, DatabaseError
+from backend.core.exceptions import (
+    ConfigurationError,
+    DatabaseError,
+    EmbeddingError,
+    RetrievalError,
+    StorageError,
+    IngestionError,
+    RateLimitError,
+    AIAssistantError
+)
 
 # Validate environment variables before starting the application
 try:
@@ -30,6 +40,154 @@ logger = get_logger(__name__)
 logger.info('AI Assistant Backend starting up')
 
 app = FastAPI(title="AI Assistant Backend")
+
+
+# ========================================
+# Global Exception Handlers
+# ========================================
+# These handlers ensure users never see raw exceptions or stack traces.
+# All custom exceptions are converted to user-friendly HTTP responses.
+
+@app.exception_handler(ConfigurationError)
+async def configuration_error_handler(request: Request, exc: ConfigurationError):
+    """Handle configuration errors - these indicate setup issues."""
+    logger.error(f'Configuration error: {exc.message}', extra={'details': exc.details})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Service temporarily unavailable",
+            "message": "The service is not properly configured. Please contact support.",
+            "code": "CONFIGURATION_ERROR"
+        }
+    )
+
+
+@app.exception_handler(DatabaseError)
+async def database_error_handler(request: Request, exc: DatabaseError):
+    """Handle database errors - connection issues, query failures, etc."""
+    logger.error(f'Database error: {exc.message}', extra={'details': exc.details})
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "Database unavailable",
+            "message": "Unable to access the database. Please try again in a moment.",
+            "code": "DATABASE_ERROR"
+        }
+    )
+
+
+@app.exception_handler(EmbeddingError)
+async def embedding_error_handler(request: Request, exc: EmbeddingError):
+    """Handle embedding generation errors - OpenAI API failures."""
+    logger.error(f'Embedding error: {exc.message}', extra={'details': exc.details})
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "Service temporarily unavailable",
+            "message": "Unable to process your request at this time. Please try again shortly.",
+            "code": "EMBEDDING_ERROR"
+        }
+    )
+
+
+@app.exception_handler(RetrievalError)
+async def retrieval_error_handler(request: Request, exc: RetrievalError):
+    """Handle document retrieval errors - search/context gathering failures."""
+    logger.error(f'Retrieval error: {exc.message}', extra={'details': exc.details})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Unable to retrieve information",
+            "message": "We couldn't retrieve the necessary information. Please try again.",
+            "code": "RETRIEVAL_ERROR"
+        }
+    )
+
+
+@app.exception_handler(StorageError)
+async def storage_error_handler(request: Request, exc: StorageError):
+    """Handle file storage errors - upload/download failures."""
+    logger.error(f'Storage error: {exc.message}', extra={'details': exc.details})
+
+    # Check if it's a file size error
+    if 'too large' in exc.message.lower():
+        return JSONResponse(
+            status_code=413,
+            content={
+                "error": "File too large",
+                "message": exc.message,
+                "code": "FILE_TOO_LARGE"
+            }
+        )
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "File operation failed",
+            "message": "Unable to process the file. Please try again.",
+            "code": "STORAGE_ERROR"
+        }
+    )
+
+
+@app.exception_handler(IngestionError)
+async def ingestion_error_handler(request: Request, exc: IngestionError):
+    """Handle document ingestion errors - chunking, processing failures."""
+    logger.error(f'Ingestion error: {exc.message}', extra={'details': exc.details})
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "Unable to process document",
+            "message": "The document could not be processed. Please check the file and try again.",
+            "code": "INGESTION_ERROR"
+        }
+    )
+
+
+@app.exception_handler(RateLimitError)
+async def rate_limit_error_handler(request: Request, exc: RateLimitError):
+    """Handle rate limit errors."""
+    logger.warning(f'Rate limit exceeded: {exc.message}', extra={'details': exc.details})
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "Rate limit exceeded",
+            "message": "Too many requests. Please try again shortly.",
+            "code": "RATE_LIMIT_EXCEEDED"
+        }
+    )
+
+
+@app.exception_handler(AIAssistantError)
+async def ai_assistant_error_handler(request: Request, exc: AIAssistantError):
+    """Catch-all handler for any other custom exceptions."""
+    logger.error(f'AI Assistant error: {exc.message}', extra={'details': exc.details})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal error",
+            "message": "An unexpected error occurred. Please try again.",
+            "code": "INTERNAL_ERROR"
+        }
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """
+    Final safety net: catch any unhandled exceptions.
+    This prevents users from seeing raw Python stack traces.
+    """
+    logger.exception(f'Unhandled exception: {type(exc).__name__}: {str(exc)}')
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "message": "An unexpected error occurred. Our team has been notified.",
+            "code": "UNHANDLED_EXCEPTION"
+        }
+    )
+
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):

@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+
+# Environment
+.env
+.env.*
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in container)
+*.md
+!README.md
+
+# Tests (if you add them)
+tests/
+*.test.py
+
+# Development
+docker-compose.yml
+Dockerfile
+
+# Logs
+*.log
