@@ -28,7 +28,14 @@
   <script>
     const apiBase = document.querySelector('#apiBase').value.trim();
     const websiteId = document.querySelector('#websiteId').value.trim();
-    window.AIChatWidget.init({ apiBase, websiteId, title: 'AI Assistant' });
+    window.AIChatWidget.init({ apiBase, websiteId, title: 'AI Assistant',
+     theme: {
+    primary: '#6905c9',
+    primary2: '#6905c9'
+  },
+  onFeedback: (fb) => {
+    console.log(fb);
+  }});
   </script>
 </body>
 </html>
