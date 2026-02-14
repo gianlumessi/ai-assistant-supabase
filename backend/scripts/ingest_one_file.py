@@ -16,9 +16,9 @@ from backend.services.ingest import ingest_text_into_chunks
 from backend.core.config import config
 from backend.core.logging_config import setup_logging
 
-WEBSITE_ID = '8d0ab061-29ee-4fc6-be98-252f808b6d37'  # mercantidicalabria.com
+WEBSITE_ID = 'WEBSITE_UUID'
 BUCKET = "documents"
-PATH = "mercanti_di_calabria/mercantidicalabria_faq.txt"
+PATH = "website_alias/faq.txt"
 
 
 def main():
