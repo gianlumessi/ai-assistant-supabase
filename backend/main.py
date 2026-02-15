@@ -222,10 +222,21 @@ app.include_router(chat.router)
 
 # If you already have CORS & health routes, keep them as-is.
 
+# Mount static files
 app.mount("/widget", StaticFiles(directory="frontend/widget", html=True), name="widget")
+app.mount("/landing", StaticFiles(directory="frontend/landing", html=True), name="landing")
+
+# Serve landing page at root
+from fastapi.responses import FileResponse
 
 @app.get("/")
 def root():
+    """Serve the landing page at root"""
+    return FileResponse("frontend/landing/index.html")
+
+@app.get("/api/health")
+def api_health():
+    """API health check (kept for backward compatibility)"""
     return {"ok": True}
 
 # Health: checks DB via anon key; point to an existing table (websites)
