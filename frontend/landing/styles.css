@@ -103,6 +103,20 @@ h1, h2, h3, h4, h5, h6 {
   background-clip: text;
 }
 
+.logo-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.logo-tagline {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  background: none;
+  -webkit-text-fill-color: var(--text-muted);
+}
+
 .nav-links {
   display: flex;
   align-items: center;
@@ -416,6 +430,22 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* Contact Section */
+.contact-email {
+  margin-top: var(--spacing-lg);
+  text-align: center;
+  font-size: 1.1rem;
+}
+
+.contact-email a {
+  display: inline-flex;
+  align-items: center;
+}
+
+.contact-email a:hover {
+  color: var(--primary-color);
+  text-decoration: underline;
+}
+
 .contact-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
