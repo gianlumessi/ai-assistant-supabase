@@ -13,6 +13,7 @@
     sessionId: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
     visitorId: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + 1),
     title: "AI Assistant",
+    subtitle: "Here to help",
 
     // Theme is easily configurable via init({ theme: { ... } })
     theme: {
@@ -521,7 +522,7 @@
         </div>
         <div class="ai-title">
           <div class="ai-panel-title">${escapeHtml(config.title || "AI Assistant")}</div>
-          <div class="ai-panel-subtitle">Always here to help</div>
+          <div class="ai-panel-subtitle">${escapeHtml(config.subtitle || "Here to help")}</div>
         </div>
       </div>
 
