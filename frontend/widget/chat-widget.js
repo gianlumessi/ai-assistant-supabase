@@ -521,7 +521,7 @@
         </div>
         <div class="ai-title">
           <div class="ai-panel-title">${escapeHtml(config.title || "AI Assistant")}</div>
-          <div class="ai-panel-subtitle">Always here to help</div>
+          <div class="ai-panel-subtitle">Here to help</div>
         </div>
       </div>
 
@@ -571,7 +571,7 @@
     const powered = document.createElement("div");
     powered.className = "ai-powered";
     powered.innerHTML = `
-      Powered by GM Intelligence
+      Powered by GM-Intelligence
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"></path>
       </svg>
