@@ -572,7 +572,7 @@
     const powered = document.createElement("div");
     powered.className = "ai-powered";
     powered.innerHTML = `
-      Powered by IdeasCrafter-AI
+      Powered by GM-Intelligence
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"></path>
       </svg>
