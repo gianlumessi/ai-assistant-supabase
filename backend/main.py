@@ -201,6 +201,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://www.mercantidicalabria.com",
                    "https://mercantidicalabria.com",
+                   "https://www.gm-intelligent-agents.com",
+                   "https://gm-intelligent-agents.com",
+                   "https://ai-assistant-supabase.onrender.com",
+                   "https://www.ai-assistant-supabase.onrender.com"
                    ## Dev origins:
                    "http://localhost:8000",
                    "http://localhost:5173",

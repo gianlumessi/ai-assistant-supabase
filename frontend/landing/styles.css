@@ -649,6 +649,105 @@ h1, h2, h3, h4, h5, h6 {
   }
 }
 
+/* Phone-specific adjustments */
+@media (max-width: 480px) {
+  .container {
+    padding: 0 var(--spacing-sm);
+  }
+
+  .section {
+    padding: var(--spacing-xl) 0;
+  }
+
+  .section-header {
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .hero {
+    min-height: auto;
+    padding: var(--spacing-lg) 0;
+  }
+
+  .hero-container {
+    padding: var(--spacing-xl) var(--spacing-sm);
+  }
+
+  .hero-title {
+    font-size: 2rem;
+  }
+
+  .hero-subtitle {
+    font-size: 1rem;
+  }
+
+  .hero-stats {
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-sm);
+  }
+
+  .stat-number {
+    font-size: 1.75rem;
+  }
+
+  .hero-buttons {
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .features-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .feature-card {
+    padding: var(--spacing-lg);
+  }
+
+  .feature-title {
+    font-size: 1.25rem;
+  }
+
+  .step {
+    padding: var(--spacing-md);
+  }
+
+  .demo-content {
+    padding: var(--spacing-lg);
+    min-height: auto;
+  }
+
+  .demo-content h3 {
+    font-size: 1.5rem;
+  }
+
+  .section-title {
+    font-size: 1.75rem;
+  }
+
+  .section-subtitle {
+    font-size: 1rem;
+  }
+
+  .footer {
+    padding: var(--spacing-xl) 0 var(--spacing-md);
+  }
+
+  .logo {
+    font-size: 1.25rem;
+  }
+
+  .logo-tagline {
+    font-size: 0.65rem;
+  }
+
+  .btn-lg {
+    padding: 0.75rem 1.5rem;
+    font-size: 1rem;
+  }
+
+  .contact-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Animations */
 @keyframes fadeInUp {
   from {
