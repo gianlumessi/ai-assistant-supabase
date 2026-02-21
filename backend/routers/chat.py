@@ -94,7 +94,10 @@ def _origin_host(origin: str | None) -> str | None:
 
 def _is_origin_allowed(website_id: str, origin: str | None) -> bool:
     """
-    Allow only requests coming from the website's domain.
+    Allow only requests coming from the website's domain(s).
+    The 'domain' column supports multiple comma-separated domains,
+    e.g. "ai-assistant-supabase.onrender.com, gm-intelligent-agents.com"
+    Each domain also implicitly allows its www. variant and vice versa.
     """
     host = _origin_host(origin)
     if not host:
@@ -108,16 +111,22 @@ def _is_origin_allowed(website_id: str, origin: str | None) -> bool:
         .execute()
     )
     row = (res.data or [{}])[0]
-    domain = (row.get("domain") or "").strip().lower()
+    raw_domain = (row.get("domain") or "").strip().lower()
 
-    # basic normalize: allow exact match or www. variant
+    if not raw_domain:
+        return False
+
+    # Split by comma and check each domain
+    domains = [d.strip().rstrip("/") for d in raw_domain.split(",") if d.strip()]
+
     host = host.lower()
-    if host == domain:
-        return True
-    if domain.startswith("www.") and host == domain[4:]:
-        return True
-    if host.startswith("www.") and host[4:] == domain:
-        return True
+    for domain in domains:
+        if host == domain:
+            return True
+        if domain.startswith("www.") and host == domain[4:]:
+            return True
+        if host.startswith("www.") and host[4:] == domain:
+            return True
     return False
 
 def _rate_limited(website_id: str, ip: str | None) -> bool:
